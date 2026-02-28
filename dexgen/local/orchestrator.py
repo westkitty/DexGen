@@ -1,0 +1,510 @@
+import json
+import logging
+import math
+import os
+import shutil
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+import gradio as gr
+import requests
+
+# --- Configuration & Defaults ---
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(message)s")
+logger = logging.getLogger("DexGen_Orchestrator")
+
+DEFAULT_STORAGE_PATH = "/Volumes/ExternalSSD/Starsilk_Renders"
+# Fallback to local user home if SSD not found
+if not os.path.exists(DEFAULT_STORAGE_PATH):
+    DEFAULT_STORAGE_PATH = os.path.join(Path.home(), "Starsilk_Renders")
+os.makedirs(DEFAULT_STORAGE_PATH, exist_ok=True)
+
+# Preset Dictionaries based on Project Bible
+STYLE_PRESETS = {
+    "None": "",
+    "Cel-shaded": "Cel-shaded animation style, striking visual contrast.",
+    "Flat Animation": "Flat 2D animation style, vector art, smooth curves.",
+    "Glow": "Ethereal glowing emission effect, dark background contrast."
+}
+
+NEGATIVE_MASTER = "blurry, distorted, low quality, gradient backgrounds, realistic textures, 3D render, over-detailed, inconsistent line weight."
+
+# --- Helper Functions ---
+def sanitize_filename(name: str) -> str:
+    """Sanitizes strings for safe filename usage."""
+    return "".join(c if c.isalnum() else "_" for c in name)[:50]
+
+def get_headers(api_key: str) -> Dict[str, str]:
+    return {"X-API-Key": api_key}
+
+def write_metadata(filepath: str, metadata: dict):
+    """Writes a companion JSON file next to the generated media."""
+    json_path = os.path.splitext(filepath)[0] + ".json"
+    with open(json_path, 'w') as f:
+        json.dump(metadata, f, indent=2)
+
+# --- Remote API Interactions ---
+
+def check_remote_status(bridge_url: str, api_key: str) -> str:
+    """Checks the /v1/health endpoint."""
+    if not bridge_url:
+        return "❌ Missing Bridge URL"
+        
+    url = bridge_url.rstrip("/") + "/v1/health"
+    try:
+        resp = requests.get(url, timeout=5, headers=get_headers(api_key))
+        if resp.status_code == 200:
+            data = resp.json()
+            return f"✅ Online (GPU: {data.get('gpu', 'Unknown')})"
+        return f"⚠️ Error HTTP {resp.status_code}"
+    except requests.exceptions.RequestException:
+        return "🔴 Remote Unreachable"
+
+def fetch_vram_stats(bridge_url: str, api_key: str) -> str:
+    """Checks the /v1/stats endpoint for VRAM monitoring."""
+    if not bridge_url:
+        return "Stats Unavailable"
+        
+    url = bridge_url.rstrip("/") + "/v1/stats"
+    try:
+        resp = requests.get(url, timeout=5, headers=get_headers(api_key))
+        if resp.status_code == 200:
+            data = resp.json()
+            used = data.get("vram_used_mb", 0)
+            total = data.get("vram_total_mb", 0)
+            que = data.get("active_jobs_count", 0)
+            return f"VRAM: {used}/{total} MB | Queued Jobs: {que}"
+        return f"HTTP {resp.status_code}"
+    except requests.exceptions.RequestException:
+        return "Remote Offline"
+
+def submit_generate_job(
+    bridge_url: str, api_key: str, prompt: str, character_lock: str, 
+    style_key: str, custom_negative: str, seed: int, steps: int, save_to_drive: bool
+) -> Optional[str]:
+    """Submits a Text-to-Image job to the remote."""
+    url = bridge_url.rstrip("/") + "/v1/generate"
+    
+    # Negative Prompt Master
+    full_negative = f"{NEGATIVE_MASTER}, {custom_negative}".strip(", ")
+    
+    payload = {
+        "prompt": prompt,
+        "character_lock": character_lock,
+        "style_preset": STYLE_PRESETS.get(style_key, ""),
+        "negative_prompt": full_negative,
+        "seed": int(seed),
+        "steps": int(steps),
+        "save_to_drive": save_to_drive
+    }
+    
+    try:
+        resp = requests.post(url, json=payload, headers=get_headers(api_key), timeout=10)
+        resp.raise_for_status()
+        return resp.json().get("job_id")
+    except Exception as e:
+        logger.error(f"Generate Submit Error: {e}")
+        return None
+
+def submit_animate_job(
+    bridge_url: str, api_key: str, image_path: str, prompt: str, fps: int, num_frames: int, motion: int
+) -> Optional[str]:
+    """Submits an Image-to-Video job to the remote."""
+    url = bridge_url.rstrip("/") + "/v1/animate"
+    
+    data = {
+        "prompt": prompt,
+        "fps": fps,
+        "num_frames": num_frames,
+        "motion_strength": motion
+    }
+    
+    try:
+        with open(image_path, "rb") as f:
+            files = {"file": (os.path.basename(image_path), f, "image/jpeg")}
+            resp = requests.post(url, data=data, files=files, headers=get_headers(api_key), timeout=30)
+            resp.raise_for_status()
+            return resp.json().get("job_id")
+    except Exception as e:
+        logger.error(f"Animate Submit Error: {e}")
+        return None
+
+def poll_and_download_job(
+    bridge_url: str, api_key: str, job_id: str, local_storage: str, metadata: dict
+) -> Tuple[bool, str, Optional[str]]:
+    """Polls a job until done, then downloads and saves it."""
+    base_url = bridge_url.rstrip("/")
+    status_url = f"{base_url}/v1/jobs/{job_id}"
+    download_url = f"{base_url}/v1/jobs/{job_id}/download"
+    headers = get_headers(api_key)
+    
+    logger.info(f"Started polling job: {job_id}")
+    
+    max_retries = 120 # ~10 mins
+    for _ in range(max_retries):
+        try:
+            resp = requests.get(status_url, headers=headers, timeout=5)
+            if resp.status_code != 200:
+                return False, f"Server returned {resp.status_code}", None
+                
+            data = resp.json()
+            status = data.get("status")
+            
+            if status == "error":
+                return False, f"Remote Error: {data.get('error_message')}", None
+            
+            if status == "done":
+                # Download File
+                logger.info(f"[{job_id}] Done. Downloading...")
+                dl_resp = requests.get(download_url, headers=headers, stream=True, timeout=30)
+                dl_resp.raise_for_status()
+                
+                # Construct Filename: YYYYMMDD_HHMMSS__{kind}__seed__jobid__slug.{ext}
+                dt_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+                kind = data.get("kind", "gen")
+                seed = metadata.get("seed", 0)
+                slug = sanitize_filename(metadata.get("prompt_headline", "out"))[:20]
+                
+                # Determine extension 
+                remote_name = data.get("result_filename") or "output.png"
+                ext = os.path.splitext(remote_name)[1]
+                if not ext:
+                    ext = ".mp4" if kind == "animate" else ".png"
+                
+                final_name = f"{dt_str}__{kind}__sed_{seed}__{job_id[-8:]}__{slug}{ext}"
+                final_path = os.path.join(local_storage, final_name)
+                
+                # Save media
+                with open(final_path, 'wb') as f:
+                    for chunk in dl_resp.iter_content(chunk_size=8192):
+                        f.write(chunk)
+                
+                # Append remote info to metadata and save
+                metadata["remote_job_id"] = job_id
+                metadata["timestamp"] = dt_str
+                metadata["filename"] = final_name
+                write_metadata(final_path, metadata)
+                
+                logger.info(f"[{job_id}] Successfully saved to {final_path}")
+                return True, "Done", final_path
+                
+        except requests.exceptions.RequestException as e:
+            logger.warning(f"[{job_id}] Polling error: {e}")
+            
+        # Wait before polling again
+        time.sleep(5)
+        
+    return False, "Timeout while waiting for remote job.", None
+
+# --- UI Action Handlers ---
+
+def ui_action_generate(
+    bridge_url, api_key, storage_path, 
+    prompts_text, char_lock, style, custom_neg, 
+    seed, lock_seed, steps, drive_toggle
+):
+    """Handles the Prompt Matrixing and job submission for Flux generation."""
+    if not bridge_url:
+        yield "Error: Bridge URL missing", None
+        return
+        
+    os.makedirs(storage_path, exist_ok=True)
+    
+    prompts = [p.strip() for p in prompts_text.split("\n") if p.strip()]
+    if not prompts:
+        yield "Error: No prompts provided", None
+        return
+        
+    results_list = []
+    
+    for i, prompt in enumerate(prompts):
+        current_seed = seed if lock_seed else int(time.time() * 1000) % 2**32
+        
+        status_msg = f"Batch Progress: {i}/{len(prompts)} | Submitting '{prompt[:30]}...' (Seed: {current_seed})"
+        yield status_msg, None
+        
+        job_id = submit_generate_job(
+            bridge_url, api_key, prompt, char_lock, style, custom_neg, current_seed, steps, drive_toggle
+        )
+        
+        if not job_id:
+            yield f"Error submitting batch item {i+1}", None
+            continue
+            
+        yield f"Batch Progress: {i}/{len(prompts)} | Polling Remote Job: {job_id}", None
+        
+        meta = {
+            "type": "text-to-image",
+            "prompt_headline": prompt,
+            "full_prompt": f"{char_lock}, {style}, {prompt}".strip(", "),
+            "character_lock": char_lock,
+            "style_preset": style,
+            "negative_prompt": f"{NEGATIVE_MASTER}, {custom_neg}".strip(", "),
+            "seed": current_seed,
+            "steps": steps,
+        }
+        
+        success, msg, path = poll_and_download_job(bridge_url, api_key, job_id, storage_path, meta)
+        
+        if success and path:
+            results_list.append(path)
+        else:
+            yield f"Error on '{prompt}': {msg}", None
+            
+    # Yield final results
+    if results_list:
+        yield f"✅ Completed {len(results_list)} generations.", results_list[-1]  # Return last image for preview
+    else:
+        yield "❌ Batch failed.", None
+
+def ui_action_animate(
+    bridge_url, api_key, storage_path,
+    image_path, prompt, fps, num_frames, motion
+):
+    """Handles the I2V submission and polling."""
+    if not bridge_url or not image_path:
+        yield "Error: Missing Bridge URL or Image", None
+        return
+        
+    os.makedirs(storage_path, exist_ok=True)
+    
+    yield "Submitting animation job...", None
+    
+    job_id = submit_animate_job(bridge_url, api_key, image_path, prompt, fps, num_frames, motion)
+    
+    if not job_id:
+        yield "Error: Failed to submit to remote.", None
+        return
+        
+    yield f"Polling Video Generation... ({job_id})", None
+    
+    meta = {
+        "type": "image-to-video",
+        "prompt_headline": prompt,
+        "fps": fps,
+        "num_frames": num_frames,
+        "motion_strength": motion,
+        "source_image": os.path.basename(image_path)
+    }
+    
+    success, msg, path = poll_and_download_job(bridge_url, api_key, job_id, storage_path, meta)
+    
+    if success and path:
+        yield f"✅ Done. Saved to {path}", path
+    else:
+        yield f"❌ Error: {msg}", None
+
+def get_gallery_items(storage_path):
+    """Loads images and videos from the local storage path."""
+    if not os.path.exists(storage_path):
+        return []
+        
+    files = []
+    for f in os.listdir(storage_path):
+        if f.lower().endswith(('.png', '.jpg', '.jpeg', '.mp4')):
+            files.append(os.path.join(storage_path, f))
+            
+    # Sort by creation time, newest first
+    files.sort(key=os.path.getmtime, reverse=True)
+    return files
+
+# --- UI Theme & CSS (Glassmorphism / Starsilk) ---
+
+custom_css = """
+/* Global Background - Deep Space Gradient */
+body {
+    background: linear-gradient(135deg, #050B14 0%, #1A0B2E 100%) !important;
+    background-attachment: fixed !important;
+    color: #E2E8F0 !important;
+    font-family: 'Inter', 'Segoe UI', sans-serif !important;
+}
+
+/* Glassmorphism Containers */
+.gradio-container {
+    background: transparent !important;
+}
+
+.tabs, .tabitem, .form, .panel, .box {
+    background: rgba(15, 20, 35, 0.4) !important;
+    backdrop-filter: blur(12px) !important;
+    -webkit-backdrop-filter: blur(12px) !important;
+    border: 1px solid rgba(0, 255, 255, 0.1) !important;
+    border-radius: 16px !important;
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.5) !important;
+    overflow: hidden;
+}
+
+/* Primary Accents - Starsilk Cyan & Glow */
+button.primary {
+    background: linear-gradient(90deg, #00D2FF 0%, #3A7BD5 100%) !important;
+    border: none !important;
+    color: #ffffff !important;
+    font-weight: bold !important;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.4) !important;
+    box-shadow: 0 4px 15px rgba(0, 210, 255, 0.3) !important;
+    transition: all 0.3s ease !important;
+    border-radius: 8px !important;
+}
+
+button.primary:hover {
+    transform: translateY(-2px) !important;
+    box-shadow: 0 6px 20px rgba(0, 210, 255, 0.5) !important;
+}
+
+/* Secondary Buttons */
+button.secondary {
+    background: rgba(255, 255, 255, 0.05) !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    color: #A0AEC0 !important;
+    transition: all 0.2s ease !important;
+    backdrop-filter: blur(4px) !important;
+}
+button.secondary:hover {
+    background: rgba(255, 255, 255, 0.1) !important;
+    color: #fff !important;
+}
+
+/* Inputs & Textareas */
+input, textarea, .file-preview {
+    background: rgba(0, 0, 0, 0.3) !important;
+    border: 1px solid rgba(0, 255, 255, 0.15) !important;
+    color: #E2E8F0 !important;
+    border-radius: 8px !important;
+    transition: border-color 0.3s ease !important;
+}
+input:focus, textarea:focus {
+    border-color: #00D2FF !important;
+    box-shadow: 0 0 0 2px rgba(0, 210, 255, 0.2) !important;
+}
+
+/* Typographic Headers */
+h1, h2, h3 {
+    color: #00D2FF !important;
+    text-shadow: 0 0 10px rgba(0, 210, 255, 0.3) !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.5px !important;
+}
+
+/* Custom Checkbox/Slider Accents */
+input[type="range"]::-webkit-slider-thumb {
+    background: #00D2FF !important;
+    box-shadow: 0 0 10px rgba(0, 210, 255, 0.5) !important;
+}
+"""
+
+# --- Construct Gradio App ---
+
+theme = gr.themes.Base()
+
+with gr.Blocks(theme=theme, css=custom_css, title="DexGen Orchestrator") as app:
+    
+    with gr.Row():
+        gr.Markdown("# 🌌 DexGen Orchestrator")
+        btn_refresh_status = gr.Button("🔄 Refresh Remote", size="sm")
+    
+    with gr.Row():
+        with gr.Column(scale=2):
+            input_url = gr.Textbox(label="Cloudflare Bridge URL", placeholder="https://<hash>.trycloudflare.com", type="text")
+        with gr.Column(scale=1):
+            input_key = gr.Textbox(label="API Key", value="starsilk_remote_auth_key", type="password")
+        with gr.Column(scale=2):
+            input_storage = gr.Textbox(label="Local Storage Path", value=DEFAULT_STORAGE_PATH)
+
+    with gr.Row():
+        text_status = gr.Markdown("Status: `Awaiting URL...`")
+        text_stats = gr.Markdown("VRAM: `...`")
+        
+    # Wire up the status ping
+    def update_status(url, key):
+        stat = check_remote_status(url, key)
+        vram = fetch_vram_stats(url, key)
+        return f"Status: `{stat}`", f"VRAM: `{vram}`"
+        
+    btn_refresh_status.click(update_status, inputs=[input_url, input_key], outputs=[text_status, text_stats])
+
+    with gr.Tabs():
+        # --- TAB 1: FLUX FORGE ---
+        with gr.TabItem("🖼️ Flux Forge (Image)"):
+            with gr.Row():
+                with gr.Column(scale=1):
+                    gr.Markdown("### 1. Character Lock")
+                    in_char_lock = gr.Textbox(
+                        label="Character Bible Concept", 
+                        lines=3,
+                        value="A cel-shaded small black-and-white dog, floppy ears down, human-like eyes, thick clean outlines, flat colors, consistent facial markings, no breed morphing."
+                    )
+                    
+                    gr.Markdown("### 2. Style Preset")
+                    in_style = gr.Dropdown(choices=list(STYLE_PRESETS.keys()), value="Cel-shaded", label="Style Template")
+                    in_neg = gr.Textbox(label="Custom Negative Items (Appended to Master)", placeholder="e.g. text, watermark, signature")
+                    
+                    gr.Markdown("### 3. Settings")
+                    with gr.Row():
+                        in_seed = gr.Number(label="Seed", value=42, precision=0)
+                        in_lock_seed = gr.Checkbox(label="Lock Seed across Batch?", value=False)
+                    in_steps = gr.Slider(minimum=1, maximum=10, step=1, value=4, label="Inference Steps")
+                    in_drive = gr.Checkbox(label="Direct-to-Drive (Remote Mirror)", value=False)
+                    
+                with gr.Column(scale=1):
+                    gr.Markdown("### 4. Prompt Matrixing")
+                    gr.Markdown("*Enter one prompt per line to batch generate.*")
+                    in_prompts = gr.Textbox(
+                        label="Scene Prompts", 
+                        lines=5, 
+                        placeholder="standing in a cyberpunk city neon rain\\nsitting by a warm fireplace reading a book\\ndoing a backflip off a spaceship"
+                    )
+                    
+                    btn_generate = gr.Button("🚀 Generate Batch", variant="primary")
+                    out_gen_status = gr.Textbox(label="Progress", interactive=False)
+                    out_gen_image = gr.Image(label="Last Output Preview", type="filepath")
+
+            btn_generate.click(
+                ui_action_generate,
+                inputs=[
+                    input_url, input_key, input_storage,
+                    in_prompts, in_char_lock, in_style, in_neg,
+                    in_seed, in_lock_seed, in_steps, in_drive
+                ],
+                outputs=[out_gen_status, out_gen_image]
+            )
+
+        # --- TAB 2: SILK MOTION ---
+        with gr.TabItem("🎬 Silk Motion (Video)"):
+            with gr.Row():
+                with gr.Column(scale=1):
+                    in_source_img = gr.Image(label="Source Image", type="filepath")
+                    in_vid_prompt = gr.Textbox(label="Motion Guidance Prompt", placeholder="camera pan right, character waving")
+                    
+                    with gr.Row():
+                        in_fps = gr.Slider(minimum=1, maximum=24, step=1, value=7, label="FPS")
+                        in_frames = gr.Slider(minimum=7, maximum=50, step=1, value=14, label="FramesCount")
+                        in_motion = gr.Slider(minimum=0, maximum=255, step=1, value=127, label="Motion Strength")
+                        
+                    btn_animate = gr.Button("🎥 Animate Vector", variant="primary")
+                    
+                with gr.Column(scale=1):
+                    out_vid_status = gr.Textbox(label="Progress", interactive=False)
+                    out_vid_result = gr.Video(label="Video Result")
+
+            btn_animate.click(
+                ui_action_animate,
+                inputs=[
+                    input_url, input_key, input_storage,
+                    in_source_img, in_vid_prompt,
+                    in_fps, in_frames, in_motion
+                ],
+                outputs=[out_vid_status, out_vid_result]
+            )
+            
+        # --- TAB 3: LIBRARY ---
+        with gr.TabItem("📁 Starsilk Library"):
+            gr.Markdown(f"Reading from: **{DEFAULT_STORAGE_PATH}**")
+            btn_refresh_lib = gr.Button("🔄 Refresh Library View")
+            out_gallery = gr.Gallery(label="Local Outputs", columns=4)
+            
+            btn_refresh_lib.click(get_gallery_items, inputs=[input_storage], outputs=[out_gallery])
+            
+if __name__ == "__main__":
+    app.launch(server_name="127.0.0.1", server_port=7860, show_api=False)
