@@ -312,23 +312,24 @@ def system_stats():
     
     if torch.cuda.is_available():
         t = torch.cuda.get_device_properties(0).total_memory
+        r = torch.cuda.memory_reserved(0)
         a = torch.cuda.memory_allocated(0)
         
         vram_total_mb = t // (1024 * 1024)
         vram_used_mb = a // (1024 * 1024)
         vram_free_mb = (t - a) // (1024 * 1024)
-
-    active_count = 0
-    with job_state_lock:
-        active_count = len([j for j in active_jobs.values() if j.status in ["queued", "running"]])
         
     return {
         "uptime_seconds": int(uptime),
         "vram_total_mb": vram_total_mb,
         "vram_used_mb": vram_used_mb,
         "vram_free_mb": vram_free_mb,
-        "active_jobs_count": active_count
     }
+    
+    with job_state_lock:
+        stats["active_jobs_count"] = len([j for j in active_jobs.values() if j.status in ["queued", "running"]])
+        
+    return stats
 
 @app.post("/v1/generate", dependencies=[Depends(get_api_key)])
 async def generate_image(req: GenerateRequest):

@@ -53,18 +53,6 @@ def extract_frames_bg(video_path: str, storage_path: str, job_id: str):
         logger.warning(f"[{job_id}] ffmpeg not found in PATH. Skipping frame extraction.")
         return
 
-    try:
-        prev_size = -1
-        for _ in range(10):
-            if os.path.exists(video_path):
-                curr_size = os.path.getsize(video_path)
-                if curr_size > 0 and curr_size == prev_size:
-                    break
-                prev_size = curr_size
-            time.sleep(1.0)
-    except Exception as e:
-        logger.warning(f"[{job_id}] Error checking file size: {e}")
-
     frames_dir = os.path.join(storage_path, f"{job_id}_frames")
     os.makedirs(frames_dir, exist_ok=True)
     
