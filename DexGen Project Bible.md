@@ -23,6 +23,8 @@ The backend is a FastAPI server running in a Google Colab notebook environment. 
 
 **Current Endpoints:**
 * **GET `/` (Health):** Returns backend status and available models.
+* **GET `/favicon.ico`:** Returns `204 No Content` to avoid browser-noise errors.
+* **GET `/auth_check`:** Protected connectivity check for the local app. Requires `X-API-Key`.
 * **POST `/generate` (Image):** Synchronous image generation.
     * **Request Schema:**
       ```json
@@ -68,6 +70,12 @@ The backend utilizes an `inference_lock` to ensure only one model is active at a
 The backend URL is established via `cloudflared`. The URL is captured from the process output using a regular expression and written to the rendezvous file:
 * **Capture Command:** `cloudflared tunnel --url http://127.0.0.1:8000`
 * **Writing Logic:** The URL is persisted to `/content/drive/MyDrive/DexGen/current_url.txt`.
+* **Current Experiment State (2026-03-08):**
+  - Browser access to `GET /` was fixed and now returns `200 OK`.
+  - Browser favicon requests were fixed and now return `204 No Content`.
+  - The local app now validates auth against `GET /auth_check` instead of `GET /`.
+  - Cloudflare Quick Tunnel stability remains unresolved in Colab. Observed failure modes during live testing included `530 The origin has been unregistered from Argo Tunnel`, intermittent `502 Bad Gateway`, and later `cloudflared` exiting before publishing a URL.
+  - The latest notebook revision switched `cloudflared` startup to logfile-based diagnostics with `--logfile` and prints the tail of the Cloudflare log on failure. This is intended to surface the real cause instead of silently failing.
 
 ### 3.4 Google Drive Layout
 The following directories and files are required for proper operation:
@@ -120,6 +128,9 @@ The client interface is built with Gradio and handles auto-discovery.
 * **Backend Status "Error":** Check the `last_error` field in `status.json` via GDrive or the client UI. Usually indicates VRAM exhaustion or `secrets.json` missing.
 * **"Bad API Key":** Ensure the key in Keychain matches the key in `/content/drive/MyDrive/DexGen/secrets.json`.
 * **"Backend Unreachable":** Verify the Cloudflare tunnel process is still running in the Colab notebook.
+* **"530 The origin has been unregistered from Argo Tunnel":** The tunnel URL was published, but the `cloudflared` process later detached or died. This was observed repeatedly during March 8, 2026 debugging.
+* **"502 Bad Gateway" on `/auth_check`:** The tunnel accepted the request, but Cloudflare could not open a stable stream to the Colab origin. This indicates tunnel instability, not an API-key mismatch.
+* **`cloudflared` exits before publishing a URL:** Use the latest notebook revision and inspect the printed `cloudflared` log tail. The current unresolved blocker is at tunnel startup/runtime, not at FastAPI routing.
 
 ## 6. File Ledger
 * `DexGen_Final_Colab.ipynb`: Authoritative backend source.
@@ -132,6 +143,12 @@ The client interface is built with Gradio and handles auto-discovery.
 * **4-bit NF4 Quantization:** Integration of `bitsandbytes` `4bit` loading for high-resolution stability if needed.
 
 ## 8. Changelog
+* **Rev 1.1 (2026-03-08):**
+    - Added public `GET /favicon.ico` and protected `GET /auth_check`.
+    - Updated the macOS client to validate auth against `/auth_check`.
+    - Removed tracked local metadata and repository PII.
+    - Reworked Cloudflare tunnel startup multiple times: first to avoid pipe-backed stdout hangs, then to use logfile-backed diagnostics.
+    - Confirmed browser health access works; did not resolve Cloudflare Quick Tunnel instability in Colab.
 * **Rev 1.0 (2026-02-28):** 
     - Corrected API endpoints to match synchronous implementation (`/generate`, `/generate_video`).
     - Updated security model to reflect macOS Keychain and GDrive `secrets.json` integration.
