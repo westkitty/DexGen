@@ -226,7 +226,7 @@ def generate_video_func(model, prompt, negative_prompt, image_path, steps, frame
 
 initial_status, initial_url, initial_updated = fetch_backend_info()
 
-with gr.Blocks(title="DexGen Client", theme=gr.themes.Default()) as demo:
+with gr.Blocks(title="DexGen Client") as demo:
     gr.Markdown("# DexGen Client")
     
     with gr.Row(variant="panel"):
@@ -322,4 +322,10 @@ with gr.Blocks(title="DexGen Client", theme=gr.themes.Default()) as demo:
 if __name__ == "__main__":
     print("Binding to 0.0.0.0 for Tailscale tailnet access...")
     print("Local access: http://127.0.0.1:7860")
-    demo.launch(server_name="0.0.0.0", server_port=7860, inbrowser=True, prevent_thread_lock=False)
+    demo.launch(
+        server_name="0.0.0.0",
+        server_port=7860,
+        inbrowser=True,
+        prevent_thread_lock=False,
+        theme=gr.themes.Default(),
+    )
