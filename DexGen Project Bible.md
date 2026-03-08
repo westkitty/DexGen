@@ -57,7 +57,7 @@ The `ModelManager` class handles sequential model loading into video random acce
 
 **As-Built Model Configurations:**
 * **sd15 (Stable Diffusion 1.5):** Loads `runwayml/stable-diffusion-v1-5` using `torch.float16` and `safetensors`.
-* **flux_schnell (FLUX.1-schnell):** Loads `black-forest-labs/FLUX.1-schnell` using `torch.bfloat16` with CPU offloading enabled via `enable_model_cpu_offload()`.
+* **flux_schnell (FLUX.1-schnell):** Loads `black-forest-labs/FLUX.1-schnell` using `torch.float16` with CPU offloading enabled via `enable_model_cpu_offload()`.
 * **i2vgen_xl (I2VGen-XL):** Loads `ali-vilab/i2vgen-xl` using `torch.float16` and `variant="fp16"`, with CPU offloading enabled.
 * **svd (Stable Video Diffusion img2vid-xt):** Loads `stabilityai/stable-video-diffusion-img2vid-xt` using `torch.float16` and `variant="fp16"`, with CPU offloading enabled.
 
@@ -106,7 +106,7 @@ The client interface is built with Gradio and handles auto-discovery.
 ### 4.2 Start Backend
 1. Open `DexGen_Final_Colab.ipynb` in Google Colab.
 2. Run all cells.
-3. Wait for the "Server is ready and rendezvous files written" message.
+3. Wait for the `SERVER IS READY` banner.
 
 ### 4.3 Start Client
 1. Execute the macOS app or `app.py`.
@@ -122,9 +122,9 @@ The client interface is built with Gradio and handles auto-discovery.
 * **"Backend Unreachable":** Verify the Cloudflare tunnel process is still running in the Colab notebook.
 
 ## 6. File Ledger
-* `/Users/andrew/Projects/DexGen/DexGen_Final_Colab.ipynb`: Authoritative backend source.
-* `/Users/andrew/Projects/DexGen/DexGenApp/app.py`: Authoritative client source.
-* `/Users/andrew/Projects/DexGen/DexGen Project Bible.md`: This document.
+* `DexGen_Final_Colab.ipynb`: Authoritative backend source.
+* `DexGenApp/app.py`: Authoritative client source.
+* `DexGen Project Bible.md`: This document.
 
 ## 7. Planned / Target v1.1+ (NOT implemented)
 * **Job Queue & Polling:** Transition from synchronous requests to an asynchronous job system with status polling.

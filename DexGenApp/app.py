@@ -4,6 +4,7 @@ import os
 import json
 import time
 import subprocess
+import getpass
 from datetime import datetime
 
 CONNECT_TIMEOUT = 5
@@ -63,7 +64,7 @@ def fetch_backend_info():
 # --- Keychain API Auth ---
 
 def load_api_key_from_keychain():
-    user = os.environ.get("USER", "andrew")
+    user = os.environ.get("USER") or getpass.getuser()
     try:
         result = subprocess.run(
             ["security", "find-generic-password", "-a", user, "-s", "DEXGEN_API_KEY", "-w"],
@@ -115,7 +116,7 @@ def test_connection_func(base_url):
             "details": "Run exactly this in terminal:\nsecurity add-generic-password -a $USER -s DEXGEN_API_KEY -w 'YOUR_API_KEY'"
         }, indent=2)
 
-    url = f"{current_url.rstrip('/')}/"
+    url = f"{current_url.rstrip('/')}/auth_check"
     headers = {"X-API-Key": api_key}
     
     start_time = time.time()

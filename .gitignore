@@ -63,6 +63,8 @@ venv.bak/
 # Local configuration
 .vscode/
 .idea/
+.DS_Store
+*.gdoc
 
 # DexGen specific ignores
 /tmp/dexgen_outputs/
@@ -71,3 +73,4 @@ venv.bak/
 *.png
 *.jpg
 *.mp4
+DexGenApp/build_log.txt
