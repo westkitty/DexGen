@@ -128,9 +128,8 @@ The client interface is built with Gradio and handles auto-discovery.
 
 ## 7. Planned / Target v1.1+ (NOT implemented)
 * **Job Queue & Polling:** Transition from synchronous requests to an asynchronous job system with status polling.
-* **`/v1` Routing:** API versioning in endpoint paths (e.g., `/v1/generate`).
 * **Streaming Download Endpoints:** Direct download for local storage without relying on Google Drive replication.
-* **4-bit NF4 Quantization:** Integration of `bitsandbytes` `4bit` loading for high-resolution stability if needed (currently using `bfloat16`).
+* **4-bit NF4 Quantization:** Integration of `bitsandbytes` `4bit` loading for high-resolution stability if needed.
 
 ## 8. Changelog
 * **Rev 1.0 (2026-02-28):** 

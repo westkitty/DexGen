@@ -1,7 +1,6 @@
 import gradio as gr
 import requests
 import os
-import sys
 import json
 import time
 import subprocess
@@ -78,6 +77,24 @@ def load_api_key_from_keychain():
 
 # --- Core Business Logic ---
 
+def coerce_int(value, default):
+    try:
+        if value in (None, ""):
+            return default
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def coerce_float(value, default):
+    try:
+        if value in (None, ""):
+            return default
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 def do_refresh():
     status, url, updated = fetch_backend_info()
     return status, url, updated, ""
@@ -135,11 +152,11 @@ def generate_image_func(model, prompt, negative_prompt, steps, width, height, se
         "model": model,
         "prompt": prompt,
         "negative_prompt": negative_prompt or None,
-        "steps": int(steps),
-        "width": int(width),
-        "height": int(height),
-        "seed": int(seed),
-        "guidance_scale": float(guidance_scale)
+        "steps": coerce_int(steps, 30),
+        "width": coerce_int(width, 512),
+        "height": coerce_int(height, 512),
+        "seed": coerce_int(seed, 0),
+        "guidance_scale": coerce_float(guidance_scale, 7.5)
     }
 
     try:
@@ -177,12 +194,12 @@ def generate_video_func(model, prompt, negative_prompt, image_path, steps, frame
         "model": model,
         "prompt": prompt,
         "negative_prompt": negative_prompt or None,
-        "image_path": image_path,
-        "steps": int(steps),
-        "frames": int(frames),
-        "fps": int(fps),
-        "seed": int(seed),
-        "guidance_scale": float(guidance_scale)
+        "image_path": (image_path or "").strip(),
+        "steps": coerce_int(steps, 25),
+        "frames": coerce_int(frames, 16),
+        "fps": coerce_int(fps, 8),
+        "seed": coerce_int(seed, 0),
+        "guidance_scale": coerce_float(guidance_scale, 7.5)
     }
 
     try:

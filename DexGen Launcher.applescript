@@ -1,6 +1,6 @@
 on run
 	set appBundlePath to POSIX path of (path to me)
-	set projectDir to do shell script "dirname " & quoted form of appBundlePath
+	set projectDir to do shell script "dirname " & quoted form of (do shell script "python3 -c 'import os,sys;print(os.path.normpath(sys.argv[1]))' " & quoted form of appBundlePath)
 	set launcherScript to projectDir & "/Launch DexGen.command"
 	
 	if (do shell script "test -f " & quoted form of launcherScript & " && echo yes || echo no") is "no" then

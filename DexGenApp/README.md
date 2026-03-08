@@ -6,7 +6,7 @@ This application serves as the frontend client for the DexGen generative applica
 
 This app uses **Google Drive Rendezvous** to communicate with the Colab backend:
 1. **Google Colab:**
-   You run a specific notebook (`DexGen_Colab_OneCell.ipynb`). It launches the FastAPI backend, opens a free Cloudflare Quick Tunnel, and writes the resulting public URL to your Google Drive (`MyDrive/DexGen/current_url.txt`).
+   You run the supported notebook (`DexGen_Final_Colab.ipynb`). It launches the FastAPI backend, opens a free Cloudflare Quick Tunnel, and writes the resulting public URL to your Google Drive (`MyDrive/DexGen/current_url.txt`).
 2. **Mac Client (This app):**
    The application uses `rclone` to constantly check your `gdrive:` remote for the active URL. 
    You never have to copy-paste URLs. Just click "Run" in Colab, wait for it to start, and double-click the DexGen app on your Mac.
@@ -41,8 +41,8 @@ Create a file named `secrets.json` and upload it to `MyDrive/DexGen/secrets.json
 
 ## Daily Usage
 
-1. Open Google Colab and run the **`DexGen_Colab_OneCell.ipynb`** cell.
-2. Wait until the cell prints `✅ Published URL and Status to Google Drive`.
+1. Open Google Colab and run all cells in **`DexGen_Final_Colab.ipynb`**.
+2. Wait until the notebook prints the **`SERVER IS READY`** banner.
 3. Double-click **`DexGen App.app`** on your Mac.
 4. The app will state **"Connected"** and display your URL automatically.
 
